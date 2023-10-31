@@ -1,0 +1,98 @@
+SELECT 
+ DISTINCT
+  db.id,
+  db.name,
+  DATE_SUB(db.createdAt, INTERVAL 5 HOUR) AS oderDate,
+  db.displayFinancialStatus,
+  UPPER(IFNULL(db.referrerDisplayText,'Desconocido')) as referrer,
+  db.fullyPaid,
+  tr.formattedGateway,
+  tr.paymentReference,
+  tr.status,
+  db.subtotalPrice,
+  db.totalDiscounts,
+  db.totalShippingPrice,
+  db.totalPrice,
+  sh.product,
+  sh.variant,
+  sh.size,
+  sh.quantity,
+  sh.originalUnitPrice,
+  CONCAT(db.shippingAddress.city, ', ', db.shippingAddress.province) AS cityProvince,
+FROM shopify_data.bulk db
+    LEFT JOIN 
+          (
+            SELECT 
+              __parentId as order_id,
+              originalUnitPrice,
+              quantity,
+              UPPER(title) AS product,
+              UPPER(TRIM(SUBSTR(variantTitle, 1, (INSTR(variantTitle," ", 1, 1)) ))) AS variant,
+              UPPER(TRIM(SUBSTR(variantTitle,INSTR(variantTitle,"/") + 2 ))) AS size
+            FROM shopify_data.bulk 
+            WHERE 
+              REGEXP_CONTAINS(id, r'(?i)lineitem') 
+              AND REGEXP_CONTAINS(variantTitle, r'(?i)/')
+              AND NOT REGEXP_CONTAINS(title, r'(?i)almohada')  
+            UNION ALL
+            SELECT 
+              __parentId as order_id,
+              originalUnitPrice,
+              quantity,
+              UPPER(title) AS product,
+              UPPER(variantTitle) AS variant,
+              UPPER(TRIM(variantTitle)) AS size
+            FROM shopify_data.bulk 
+            WHERE 
+              REGEXP_CONTAINS(id, r'(?i)lineitem') 
+              AND NOT REGEXP_CONTAINS(variantTitle, r'(?i)/')
+              AND NOT REGEXP_CONTAINS(title, r'(?i)almohada')  
+            UNION ALL
+            SELECT  
+              __parentId as order_id,
+              originalUnitPrice,
+              quantity,
+              UPPER(title) AS product,
+              UPPER(TRIM(variantTitle)) AS variant,
+              REPLACE(variantTitle, variantTitle, "STANDARD") AS size
+            FROM shopify_data.bulk
+            WHERE   REGEXP_CONTAINS(id, r'(?i)lineitem') 
+              AND REGEXP_CONTAINS(title, r'(?i)almohada')  
+              AND NOT REGEXP_CONTAINS(variantTitle, r'(?i)/') 
+            
+            UNION ALL
+            SELECT 
+              __parentId as order_id, 
+              price AS originalUnitPrice,
+              1 AS quantity,
+              "DELIVERY" as product,
+              "DELIVERY" as variant,
+              "DELIVERY" as size
+            FROM shopify_data.bulk
+            WHERE REGEXP_CONTAINS(id, r'(?i)shippingline')
+          ) sh
+    ON sh.order_id = db.id
+    LEFT JOIN 
+         (SELECT 
+            bk.id AS order_id,
+            tr.formattedGateway,
+            tr.status,
+            SUBSTR(tr.receipt, INSTR(tr.receipt, '=>', 1,5)+3, (INSTR(tr.receipt, '=>', 1,5) - 1 - INSTR(tr.receipt, ',', 1,4))) AS paymentReference,
+          FROM shopify_data.bulk bk, UNNEST (transactions) AS tr
+          WHERE
+          tr.formattedGateway IN ('Mercado Pago', 'Mi Cuenta Web')
+          UNION ALL
+          SELECT 
+            bk.id AS order_id,
+            tr.formattedGateway,
+            tr.status,
+            tr.receipt AS paymentReference,
+          FROM shopify_data.bulk bk, UNNEST (transactions) AS tr
+          WHERE
+          tr.formattedGateway <>'Mercado Pago'AND
+          tr.formattedGateway <>'Mi Cuenta Web' ) tr
+    ON db.id = tr.order_id
+WHERE 
+    db.displayFinancialStatus = 'PAID' AND
+    tr.status = 'SUCCESS'
+ 
